@@ -22,9 +22,6 @@ conda activate DDGS
 
 In the data preparation stage, we first reconstruct sparse-view inputs using **Structure-from-Motion (SfM)** with the provided camera poses from the datasets. Then, we perform dense stereo matching using COLMAP’s `patch_match_stereo` function, followed by `stereo_fusion` to generate the dense stereo point cloud.
 
-<details>
-<summary><strong> Setup Instructions</strong></summary>
-
 ```bash
 mkdir dataset
 cd dataset
