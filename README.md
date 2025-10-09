@@ -1,7 +1,13 @@
 <h1 align="center">D<sup>2</sup>GS: Depth-and-Density Guided Gaussian Splatting for Stable and Accurate Sparse-View Reconstruction</h1>
-[Project Page](https://willacold.github.io/DDGS-website/)
 
-<p align="center"><img src='figures/pipeline.png'></p>
+<p align="center">
+  <a href="https://willacold.github.io/DDGS-website/" target="_blank">Project Page</a>
+</p>
+
+<p align="center">
+  <img src="figures/pipeline.png" alt="Pipeline Image">
+</p>
+
 
 ## Overview 
 
