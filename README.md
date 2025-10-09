@@ -78,21 +78,11 @@ python render.py -s -m output_llff --eval -r 8
 python render.py -s -m output_mipnerf360 --eval -r 8
 ```
 
-## License
-
-This project is licensed under the **Apache License 2.0**, with the exception of certain components derived from the [Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) project.
-
-- **Apache License 2.0**: All original code written for DropGaussian is released under the Apache 2.0 license. See [LICENSE](./LICENSE).
-- **Non-commercial License (Inria & MPII)**: Some parts of the code are based on Gaussian Splatting, which is licensed for **non-commercial research use only**. See [LICENSE_GAUSSIAN_SPLATTING.md](./LICENSE_GAUSSIAN_SPLATTING.md) for full terms.
-
-Please ensure that you comply with both licenses when using this repository.
-
-
+## Acknowledgement
 Our implementation and experiments are built on top of open-source GitHub repositories. We thank all the authors who made their code public, which tremendously accelerates our project progress. If you find these works helpful, please consider citing them as well.
 
 [DCVL-3D/DropGaussian_release](https://github.com/DCVL-3D/DropGaussian_release)  </br>
 [GraphDeco-INRIA/gaussian-splatting](https://github.com/graphdeco-inria/gaussian-splatting)  </br>
-[VITA-Group/FSGS](https://github.com/VITA-Group/FSGS)  </br>
 
 <!-- ## Citation
 If you find our work useful for your project, please consider citing the following paper.
