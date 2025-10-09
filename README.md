@@ -4,7 +4,7 @@
 
 ## Overview 
 
-The proposed **D^2GS** mainly consists of two key components: a Depth-and-Density guided Dropout (DD-Drop) mechanism and Distance-Aware Fidelity Enhancement (DAFE), to improve the stability and spatial completeness of scene reconstruction under sparse-view settings. DD-Drop assigns each Gaussian a dropout score based on local density and camera distance, indicating regions prone to overfitting. High-scoring Gaussians would be dropped with a higher probability to suppress aliasing and improve rendering fidelity. In addition, DAFE avoids underfitting by boosting supervision in distant regions using depth priors.
+The proposed **D²GS** mainly consists of two key components: a Depth-and-Density guided Dropout (DD-Drop) mechanism and Distance-Aware Fidelity Enhancement (DAFE), to improve the stability and spatial completeness of scene reconstruction under sparse-view settings. DD-Drop assigns each Gaussian a dropout score based on local density and camera distance, indicating regions prone to overfitting. High-scoring Gaussians would be dropped with a higher probability to suppress aliasing and improve rendering fidelity. In addition, DAFE avoids underfitting by boosting supervision in distant regions using depth priors.
 
 ## Implementation
 ### Installation
