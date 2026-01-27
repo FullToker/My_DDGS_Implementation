@@ -1,4 +1,4 @@
-<h1 align="center">D<sup>2</sup>GS: Depth-and-Density Guided Gaussian Splatting for Stable and Accurate Sparse-View Reconstruction</h1>
+<h1 align="center">[ICLR 2026] D<sup>2</sup>GS: Depth-and-Density Guided Gaussian Splatting for Stable and Accurate Sparse-View Reconstruction</h1>
 
 <p align="center">
   <a href="https://insta360-research-team.github.io/DDGS-website/" target="_blank">Project Page</a>
