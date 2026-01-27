@@ -8,6 +8,16 @@
   <img src="figures/pipeline.png" alt="Pipeline Image">
 </p>
 
+<p align="center">
+  <a href="#"><b>Meixi Song*</b></a> ·
+  <a href="https://linxin0.github.io"><b>Xin Lin*</b></a> ·
+  <a href="#"><b>Dizhe Zhang</b></a> ·
+  <a href="https://haodong2000.github.io"><b>Haodong Li</b></a>
+  <br>
+  <a href="#"><b>Xiangtai Li</b></a> ·
+  <a href="#"><b>Bo Du</b></a> ·
+  <a href="http://luqi.info"><b>Lu Qi</b></a>
+</p>
 
 ## Overview 
 
