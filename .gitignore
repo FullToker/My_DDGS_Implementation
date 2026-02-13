@@ -1,0 +1,5 @@
+output/
+lab9_data/
+arguments/__pycache__/
+__pycache__/
+*/__pycache__/

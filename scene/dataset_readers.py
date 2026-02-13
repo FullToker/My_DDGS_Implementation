@@ -143,13 +143,68 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, rgb_m
     sys.stdout.write('\n')
     return cam_infos
 
-def fetchPly(path):
+def fetchPly(path, features_8d_path=None, dbscan_masks_path=None):
     plydata = PlyData.read(path)
     vertices = plydata['vertex']
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
-    return BasicPointCloud(points=positions, colors=colors, normals=normals)
+
+    # Load 8D semantic features if available
+    features_8d = None
+    if features_8d_path is not None and os.path.exists(features_8d_path):
+        print(f"Loading 8D semantic features from: {features_8d_path}")
+        data = np.load(features_8d_path)
+        # Handle different possible keys in the npz file
+        if 'features' in data:
+            features_8d = data['features']
+        elif 'arr_0' in data:
+            features_8d = data['arr_0']
+        else:
+            # Try first key
+            keys = list(data.keys())
+            if len(keys) > 0:
+                features_8d = data[keys[0]]
+
+        if features_8d is not None:
+            # Reshape from (N_images, H, W, 8) to (N_points, 8) if needed
+            if len(features_8d.shape) == 4:
+                # Shape: (N_images, H, W, 8) -> (N_images * H * W, 8)
+                features_8d = features_8d.reshape(-1, features_8d.shape[-1])
+            print(f"8D features shape: {features_8d.shape}, point cloud size: {positions.shape[0]}")
+
+            # Verify that features match point cloud size
+            if features_8d.shape[0] != positions.shape[0]:
+                print(f"[Warning] 8D features count ({features_8d.shape[0]}) != point cloud count ({positions.shape[0]})")
+                print(f"  Disabling 8D features due to size mismatch")
+                features_8d = None
+            else:
+                print(f"Successfully loaded 8D features: {features_8d.shape}")
+
+    # Load instance IDs from DBSCAN masks if available
+    instance_ids = None
+    if dbscan_masks_path is not None and os.path.exists(dbscan_masks_path):
+        print(f"Loading DBSCAN masks from: {dbscan_masks_path}")
+        mask_files = sorted(glob.glob(os.path.join(dbscan_masks_path, "mask_*.npy")))
+        if len(mask_files) > 0:
+            masks_list = []
+            for mf in mask_files:
+                mask = np.load(mf)  # Shape: (H, W), dtype: int64
+                masks_list.append(mask)
+            # Stack masks: (N_images, H, W)
+            masks_stacked = np.stack(masks_list, axis=0)
+            # Flatten to (N_points,)
+            instance_ids = masks_stacked.reshape(-1).astype(np.int32)
+            print(f"Instance IDs shape: {instance_ids.shape}, point cloud size: {positions.shape[0]}")
+
+            if instance_ids.shape[0] != positions.shape[0]:
+                print(f"[Warning] Instance IDs count ({instance_ids.shape[0]}) != point cloud count ({positions.shape[0]})")
+                print(f"  Disabling instance IDs due to size mismatch")
+                instance_ids = None
+            else:
+                print(f"Successfully loaded instance IDs: {instance_ids.shape}, unique IDs: {len(np.unique(instance_ids))}")
+
+    return BasicPointCloud(points=positions, colors=colors, normals=normals, features_8d=features_8d, instance_ids=instance_ids)
 
 def storePly(path, xyz, rgb):
     # Define the dtype for the structured array
@@ -188,7 +243,28 @@ def readColmapSceneInfo(path, images, eval, n_views=3, llffhold=8):
         print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
         xyz, rgb, _ = read_points3D_binary(bin_path)
         storePly(ply_path, xyz, rgb)
-    pcd = fetchPly(ply_path)
+
+    # Check for 8D semantic features
+    features_8d_path = os.path.join(path, "8d_features", "normalized_8d_features.npz")
+    if not os.path.exists(features_8d_path):
+        # Try alternative paths
+        alt_paths = [
+            os.path.join(path, "normalized_8d_features.npz"),
+            os.path.join(path, "8d_features.npz"),
+        ]
+        for alt_path in alt_paths:
+            if os.path.exists(alt_path):
+                features_8d_path = alt_path
+                break
+        else:
+            features_8d_path = None
+
+    # Check for DBSCAN masks
+    dbscan_masks_path = os.path.join(path, "dbscan_masks")
+    if not os.path.exists(dbscan_masks_path):
+        dbscan_masks_path = None
+
+    pcd = fetchPly(ply_path, features_8d_path, dbscan_masks_path)
 
     reading_dir = "images" if images == None else images
     rgb_mapping = [f for f in sorted(glob.glob(os.path.join(path, reading_dir, '*')))

@@ -43,13 +43,15 @@ class GaussianModel:
 
     def __init__(self, sh_degree : int):
         self.active_sh_degree = 0
-        self.max_sh_degree = sh_degree  
+        self.max_sh_degree = sh_degree
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
+        self._features_8d = torch.empty(0)  # 8D semantic features (fixed, not trainable)
+        self._instance_ids = torch.empty(0, dtype=torch.int32)  # Instance IDs from DBSCAN masks
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -69,25 +71,29 @@ class GaussianModel:
             self._scaling,
             self._rotation,
             self._opacity,
+            self._features_8d,
+            self._instance_ids,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
         )
-    
+
     def restore(self, model_args, training_args):
-        (self.active_sh_degree, 
-        self._xyz, 
-        self._features_dc, 
+        (self.active_sh_degree,
+        self._xyz,
+        self._features_dc,
         self._features_rest,
-        self._scaling, 
-        self._rotation, 
+        self._scaling,
+        self._rotation,
         self._opacity,
-        self.max_radii2D, 
-        xyz_gradient_accum, 
+        self._features_8d,
+        self._instance_ids,
+        self.max_radii2D,
+        xyz_gradient_accum,
         denom,
-        opt_dict, 
+        opt_dict,
         self.spatial_lr_scale) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
@@ -115,7 +121,15 @@ class GaussianModel:
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
-    
+
+    @property
+    def get_features_8d(self):
+        return self._features_8d
+
+    @property
+    def get_instance_ids(self):
+        return self._instance_ids
+
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
@@ -147,6 +161,22 @@ class GaussianModel:
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+        # Load 8D semantic features if available
+        if hasattr(pcd, 'features_8d') and pcd.features_8d is not None:
+            features_8d = torch.tensor(np.asarray(pcd.features_8d)).float().cuda()
+            self._features_8d = features_8d  # Fixed, not trainable
+            print(f"Loaded 8D semantic features: {self._features_8d.shape}")
+        else:
+            self._features_8d = torch.empty(0)
+
+        # Load instance IDs if available
+        if hasattr(pcd, 'instance_ids') and pcd.instance_ids is not None:
+            instance_ids = torch.tensor(np.asarray(pcd.instance_ids)).int().cuda()
+            self._instance_ids = instance_ids  # Fixed, not trainable
+            print(f"Loaded instance IDs: {self._instance_ids.shape}, unique: {len(torch.unique(self._instance_ids))}")
+        else:
+            self._instance_ids = torch.empty(0, dtype=torch.int32)
 
     def update_density_score(self):
         xyz = self.get_xyz.detach().cpu().numpy()
@@ -195,6 +225,13 @@ class GaussianModel:
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
             l.append('rot_{}'.format(i))
+        # Add 8D semantic features if available
+        if self._features_8d.numel() > 0:
+            for i in range(self._features_8d.shape[1]):
+                l.append('f_8d_{}'.format(i))
+        # Add instance ID if available
+        if self._instance_ids.numel() > 0:
+            l.append('instance_id')
         return l
 
     def save_ply(self, path):
@@ -208,10 +245,30 @@ class GaussianModel:
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
 
-        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+        # Build dtype list - instance_id uses int32 instead of float32
+        attr_list = self.construct_list_of_attributes()
+        dtype_full = []
+        for attr in attr_list:
+            if attr == 'instance_id':
+                dtype_full.append((attr, 'i4'))  # int32 for instance_id
+            else:
+                dtype_full.append((attr, 'f4'))
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
+
+        # Build attributes list
         attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+
+        # Include 8D features if available
+        if self._features_8d.numel() > 0:
+            features_8d = self._features_8d.detach().cpu().numpy()
+            attributes = np.concatenate((attributes, features_8d), axis=1)
+
+        # Include instance IDs if available
+        if self._instance_ids.numel() > 0:
+            instance_ids = self._instance_ids.detach().cpu().numpy().reshape(-1, 1)
+            attributes = np.concatenate((attributes, instance_ids), axis=1)
+
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -261,6 +318,26 @@ class GaussianModel:
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+
+        # Load 8D semantic features if available in PLY file
+        f_8d_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_8d_")]
+        if len(f_8d_names) > 0:
+            f_8d_names = sorted(f_8d_names, key=lambda x: int(x.split('_')[-1]))
+            features_8d = np.zeros((xyz.shape[0], len(f_8d_names)))
+            for idx, attr_name in enumerate(f_8d_names):
+                features_8d[:, idx] = np.asarray(plydata.elements[0][attr_name])
+            self._features_8d = torch.tensor(features_8d, dtype=torch.float, device="cuda")
+            print(f"Loaded 8D semantic features from PLY: {self._features_8d.shape}")
+        else:
+            self._features_8d = torch.empty(0)
+
+        # Load instance IDs if available in PLY file
+        if 'instance_id' in [p.name for p in plydata.elements[0].properties]:
+            instance_ids = np.asarray(plydata.elements[0]["instance_id"])
+            self._instance_ids = torch.tensor(instance_ids, dtype=torch.int32, device="cuda")
+            print(f"Loaded instance IDs from PLY: {self._instance_ids.shape}, unique: {len(torch.unique(self._instance_ids))}")
+        else:
+            self._instance_ids = torch.empty(0, dtype=torch.int32)
 
         self.active_sh_degree = self.max_sh_degree
 
@@ -313,6 +390,14 @@ class GaussianModel:
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
+        # Prune 8D semantic features if they exist
+        if self._features_8d.numel() > 0:
+            self._features_8d = self._features_8d[valid_points_mask]
+
+        # Prune instance IDs if they exist
+        if self._instance_ids.numel() > 0:
+            self._instance_ids = self._instance_ids[valid_points_mask]
+
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -335,7 +420,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_features_8d=None, new_instance_ids=None):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -350,6 +435,14 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+
+        # Concatenate 8D semantic features if they exist
+        if self._features_8d.numel() > 0 and new_features_8d is not None:
+            self._features_8d = torch.cat((self._features_8d, new_features_8d), dim=0)
+
+        # Concatenate instance IDs if they exist
+        if self._instance_ids.numel() > 0 and new_instance_ids is not None:
+            self._instance_ids = torch.cat((self._instance_ids, new_instance_ids), dim=0)
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -376,7 +469,17 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
+        # Replicate 8D semantic features for split Gaussians (inherit parent's features)
+        new_features_8d = None
+        if self._features_8d.numel() > 0:
+            new_features_8d = self._features_8d[selected_pts_mask].repeat(N, 1)
+
+        # Replicate instance IDs for split Gaussians (inherit parent's ID)
+        new_instance_ids = None
+        if self._instance_ids.numel() > 0:
+            new_instance_ids = self._instance_ids[selected_pts_mask].repeat(N)
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_features_8d, new_instance_ids)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -386,7 +489,7 @@ class GaussianModel:
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,    # self.percent_dense = 0.01
                             torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
-        
+
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -394,7 +497,17 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
+        # Copy 8D semantic features for cloned Gaussians
+        new_features_8d = None
+        if self._features_8d.numel() > 0:
+            new_features_8d = self._features_8d[selected_pts_mask]
+
+        # Copy instance IDs for cloned Gaussians
+        new_instance_ids = None
+        if self._instance_ids.numel() > 0:
+            new_instance_ids = self._instance_ids[selected_pts_mask]
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_features_8d, new_instance_ids)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom
