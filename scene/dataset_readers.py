@@ -12,6 +12,11 @@
 import os
 import sys
 import glob
+
+# Optional path to ConverSeg masks.npy (shape: N_images, H, W, 1).
+# Set this from train.py before Scene is constructed, e.g.:
+#   import scene.dataset_readers as dr; dr.SEG_MASKS_PATH = "/path/to/masks.npy"
+SEG_MASKS_PATH = ""
 from PIL import Image
 from typing import NamedTuple
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
@@ -143,7 +148,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, rgb_m
     sys.stdout.write('\n')
     return cam_infos
 
-def fetchPly(path, features_8d_path=None, dbscan_masks_path=None):
+def fetchPly(path, features_8d_path=None, dbscan_masks_path=None, seg_masks_path=None):
     plydata = PlyData.read(path)
     vertices = plydata['vertex']
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
@@ -204,7 +209,22 @@ def fetchPly(path, features_8d_path=None, dbscan_masks_path=None):
             else:
                 print(f"Successfully loaded instance IDs: {instance_ids.shape}, unique IDs: {len(np.unique(instance_ids))}")
 
-    return BasicPointCloud(points=positions, colors=colors, normals=normals, features_8d=features_8d, instance_ids=instance_ids)
+    # Load per-point segmentation mask from ConverSeg masks.npy if available
+    mask_from_converseg = None
+    if seg_masks_path is not None and os.path.exists(seg_masks_path):
+        print(f"Loading ConverSeg segmentation masks from: {seg_masks_path}")
+        seg_data = np.load(seg_masks_path)  # (N_images, H, W, 1), float32, 0.0/1.0
+        # Flatten to (N_points, 1)
+        mask_from_converseg = seg_data.reshape(-1, 1).astype(np.float32)
+        print(f"ConverSeg mask shape: {mask_from_converseg.shape}, point cloud size: {positions.shape[0]}")
+        if mask_from_converseg.shape[0] != positions.shape[0]:
+            print(f"[Warning] ConverSeg mask count ({mask_from_converseg.shape[0]}) != point cloud count ({positions.shape[0]}), disabling.")
+            mask_from_converseg = None
+        else:
+            fg_ratio = mask_from_converseg.mean()
+            print(f"Successfully loaded ConverSeg masks: {mask_from_converseg.shape}, foreground ratio: {fg_ratio:.4f}")
+
+    return BasicPointCloud(points=positions, colors=colors, normals=normals, features_8d=features_8d, instance_ids=instance_ids, mask_from_converseg=mask_from_converseg)
 
 def storePly(path, xyz, rgb):
     # Define the dtype for the structured array
@@ -264,7 +284,10 @@ def readColmapSceneInfo(path, images, eval, n_views=3, llffhold=8):
     if not os.path.exists(dbscan_masks_path):
         dbscan_masks_path = None
 
-    pcd = fetchPly(ply_path, features_8d_path, dbscan_masks_path)
+    # ConverSeg segmentation masks (optional, set SEG_MASKS_PATH before Scene init)
+    seg_masks_path = SEG_MASKS_PATH if SEG_MASKS_PATH else None
+
+    pcd = fetchPly(ply_path, features_8d_path, dbscan_masks_path, seg_masks_path)
 
     reading_dir = "images" if images == None else images
     rgb_mapping = [f for f in sorted(glob.glob(os.path.join(path, reading_dir, '*')))

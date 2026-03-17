@@ -52,6 +52,7 @@ class GaussianModel:
         self._opacity = torch.empty(0)
         self._features_8d = torch.empty(0)  # 8D semantic features (fixed, not trainable)
         self._instance_ids = torch.empty(0, dtype=torch.int32)  # Instance IDs from DBSCAN masks
+        self._mask_from_converseg = torch.empty(0)  # ConverSeg per-point mask (0.0=bg, 1.0=fg)
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -73,6 +74,7 @@ class GaussianModel:
             self._opacity,
             self._features_8d,
             self._instance_ids,
+            self._mask_from_converseg,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -90,6 +92,7 @@ class GaussianModel:
         self._opacity,
         self._features_8d,
         self._instance_ids,
+        self._mask_from_converseg,
         self.max_radii2D,
         xyz_gradient_accum,
         denom,
@@ -129,6 +132,10 @@ class GaussianModel:
     @property
     def get_instance_ids(self):
         return self._instance_ids
+
+    @property
+    def get_mask_from_converseg(self):
+        return self._mask_from_converseg
 
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
@@ -177,6 +184,13 @@ class GaussianModel:
             print(f"Loaded instance IDs: {self._instance_ids.shape}, unique: {len(torch.unique(self._instance_ids))}")
         else:
             self._instance_ids = torch.empty(0, dtype=torch.int32)
+
+        # Load ConverSeg mask if available
+        if hasattr(pcd, 'mask_from_converseg') and pcd.mask_from_converseg is not None:
+            self._mask_from_converseg = torch.tensor(np.asarray(pcd.mask_from_converseg)).float().cuda()
+            print(f"Loaded ConverSeg mask: {self._mask_from_converseg.shape}, fg ratio: {self._mask_from_converseg.mean():.4f}")
+        else:
+            self._mask_from_converseg = torch.empty(0)
 
     def update_density_score(self):
         xyz = self.get_xyz.detach().cpu().numpy()
@@ -232,6 +246,9 @@ class GaussianModel:
         # Add instance ID if available
         if self._instance_ids.numel() > 0:
             l.append('instance_id')
+        # Add ConverSeg mask if available
+        if self._mask_from_converseg.numel() > 0:
+            l.append('mask_cs')
         return l
 
     def save_ply(self, path):
@@ -252,7 +269,7 @@ class GaussianModel:
             if attr == 'instance_id':
                 dtype_full.append((attr, 'i4'))  # int32 for instance_id
             else:
-                dtype_full.append((attr, 'f4'))
+                dtype_full.append((attr, 'f4'))  # float32 for all others incl. mask_cs
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
 
@@ -268,6 +285,11 @@ class GaussianModel:
         if self._instance_ids.numel() > 0:
             instance_ids = self._instance_ids.detach().cpu().numpy().reshape(-1, 1)
             attributes = np.concatenate((attributes, instance_ids), axis=1)
+
+        # Include ConverSeg mask if available
+        if self._mask_from_converseg.numel() > 0:
+            mask_cs = self._mask_from_converseg.detach().cpu().numpy()  # (N, 1)
+            attributes = np.concatenate((attributes, mask_cs), axis=1)
 
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
@@ -339,6 +361,14 @@ class GaussianModel:
         else:
             self._instance_ids = torch.empty(0, dtype=torch.int32)
 
+        # Load ConverSeg mask if available in PLY file
+        if 'mask_cs' in [p.name for p in plydata.elements[0].properties]:
+            mask_cs = np.asarray(plydata.elements[0]["mask_cs"]).reshape(-1, 1)
+            self._mask_from_converseg = torch.tensor(mask_cs, dtype=torch.float, device="cuda")
+            print(f"Loaded ConverSeg mask from PLY: {self._mask_from_converseg.shape}, fg ratio: {self._mask_from_converseg.mean():.4f}")
+        else:
+            self._mask_from_converseg = torch.empty(0)
+
         self.active_sh_degree = self.max_sh_degree
 
     def replace_tensor_to_optimizer(self, tensor, name):
@@ -398,6 +428,10 @@ class GaussianModel:
         if self._instance_ids.numel() > 0:
             self._instance_ids = self._instance_ids[valid_points_mask]
 
+        # Prune ConverSeg mask if it exists
+        if self._mask_from_converseg.numel() > 0:
+            self._mask_from_converseg = self._mask_from_converseg[valid_points_mask]
+
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -420,7 +454,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_features_8d=None, new_instance_ids=None):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_features_8d=None, new_instance_ids=None, new_mask_from_converseg=None):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -443,6 +477,10 @@ class GaussianModel:
         # Concatenate instance IDs if they exist
         if self._instance_ids.numel() > 0 and new_instance_ids is not None:
             self._instance_ids = torch.cat((self._instance_ids, new_instance_ids), dim=0)
+
+        # Concatenate ConverSeg mask if it exists
+        if self._mask_from_converseg.numel() > 0 and new_mask_from_converseg is not None:
+            self._mask_from_converseg = torch.cat((self._mask_from_converseg, new_mask_from_converseg), dim=0)
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -479,7 +517,12 @@ class GaussianModel:
         if self._instance_ids.numel() > 0:
             new_instance_ids = self._instance_ids[selected_pts_mask].repeat(N)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_features_8d, new_instance_ids)
+        # Replicate ConverSeg mask for split Gaussians
+        new_mask_from_converseg = None
+        if self._mask_from_converseg.numel() > 0:
+            new_mask_from_converseg = self._mask_from_converseg[selected_pts_mask].repeat(N, 1)
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_features_8d, new_instance_ids, new_mask_from_converseg)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -507,7 +550,12 @@ class GaussianModel:
         if self._instance_ids.numel() > 0:
             new_instance_ids = self._instance_ids[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_features_8d, new_instance_ids)
+        # Copy ConverSeg mask for cloned Gaussians
+        new_mask_from_converseg = None
+        if self._mask_from_converseg.numel() > 0:
+            new_mask_from_converseg = self._mask_from_converseg[selected_pts_mask]
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_features_8d, new_instance_ids, new_mask_from_converseg)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom

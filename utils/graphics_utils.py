@@ -20,6 +20,7 @@ class BasicPointCloud(NamedTuple):
     normals : np.array
     features_8d : np.array = None  # Optional 8D semantic features
     instance_ids : np.array = None  # Optional instance IDs (int per point)
+    mask_from_converseg : np.array = None  # Optional per-point segmentation label (0.0=bg, 1.0=fg)
 
 def geom_transform_points(points, transf_matrix):
     P, _ = points.shape
