@@ -29,6 +29,10 @@ import copy
 import cv2
 import numpy as np
 from PIL import Image
+
+# set masks.npy location, results from ConverSeg-net and after tools combination
+import scene.dataset_readers as dr                                                                                          
+dr.SEG_MASKS_PATH = "./lab9_data/batch_converSeg_outputs_heatthing/masks.npy" 
 try:
     from torch.utils.tensorboard.writer import SummaryWriter
     TENSORBOARD_FOUND = True
